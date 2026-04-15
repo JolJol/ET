@@ -3,6 +3,7 @@
 .idea/
 .vscode/
 _ReSharper.CSharp/
+/.worktrees/
 
 #svn
 */.svn/
@@ -42,9 +43,11 @@ WebGL
 /*.user
 bin/
 Bin/
+**/bin/
 /Log
 /Logs
 obj/
+**/obj/
 /Release
 /Temp
 /Tools/MongoDB
