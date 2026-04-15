@@ -29,6 +29,8 @@ public sealed class MiniSaveOptions
 
 public sealed record LoginRequest(string Provider, string ExternalUserId, string ClientVersion, string? DisplayName);
 
+public sealed record WechatLoginRequest(string Code, string ClientVersion, string? DisplayName, string? AvatarUrl);
+
 public sealed record SaveWriteRequest(int ExpectedRevision, int SaveVersion, string ClientVersion, JsonElement GameData);
 
 public sealed record LoginResponse(string PlayerId, string AccessToken, SaveEnvelope Save);
@@ -38,6 +40,8 @@ public sealed record SaveEnvelope(int Revision, int SaveVersion, string ClientVe
 public sealed record ErrorResponse(string Code, string Message);
 
 public sealed record PlayerRecord(string PlayerId, string Provider, string ExternalUserId, string? DisplayName);
+
+public sealed record ResolvedExternalIdentity(string Provider, string ExternalUserId, string? DisplayName);
 
 internal sealed record StoredSaveRecord(
     int Revision,
@@ -313,6 +317,43 @@ public sealed class VersionPolicy
         }
 
         return version;
+    }
+}
+
+public sealed class WechatIdentityResolver
+{
+    private const string Provider = "wechat-mini-game";
+
+    public bool TryResolve(WechatLoginRequest request, out ResolvedExternalIdentity? identity, out ErrorResponse? error)
+    {
+        identity = null;
+        error = null;
+
+        string code = request.Code.Trim();
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            error = new ErrorResponse("invalid_code", "code is required.");
+            return false;
+        }
+
+        if (code.Length > 128)
+        {
+            error = new ErrorResponse("invalid_code", "code is too long.");
+            return false;
+        }
+
+        if (code.Any(char.IsWhiteSpace))
+        {
+            error = new ErrorResponse("invalid_code", "code cannot contain whitespace.");
+            return false;
+        }
+
+        // This placeholder mapping keeps the client contract close to WeChat login
+        // while making it easy to replace with a real code2Session resolver later.
+        byte[] externalIdBytes = SHA256.HashData(Encoding.UTF8.GetBytes(code));
+        string externalUserId = Convert.ToHexString(externalIdBytes);
+        identity = new ResolvedExternalIdentity(Provider, externalUserId, request.DisplayName);
+        return true;
     }
 }
 

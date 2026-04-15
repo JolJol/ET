@@ -13,6 +13,7 @@ builder.Services.Configure<JsonOptions>(options =>
 builder.Services.AddSingleton<RequestSignatureValidator>();
 builder.Services.AddSingleton<AccessTokenService>();
 builder.Services.AddSingleton<VersionPolicy>();
+builder.Services.AddSingleton<WechatIdentityResolver>();
 builder.Services.AddSingleton<SqliteSaveStore>();
 builder.Services.AddRateLimiter(options =>
 {
@@ -76,6 +77,41 @@ app.MapPost("/v1/auth/external-login", async (
     }
 
     PlayerRecord player = await store.GetOrCreatePlayerAsync(request.Provider, request.ExternalUserId, request.DisplayName, cancellationToken);
+    SaveEnvelope save = await store.GetOrCreateSaveAsync(player.PlayerId, request.ClientVersion, cancellationToken);
+    string accessToken = accessTokenService.Create(player.PlayerId);
+
+    return Results.Ok(new LoginResponse(player.PlayerId, accessToken, save));
+})
+.RequireRateLimiting("auth");
+
+app.MapPost("/v1/auth/wechat-login", async (
+    HttpRequest httpRequest,
+    RequestSignatureValidator requestSignatureValidator,
+    VersionPolicy versionPolicy,
+    WechatIdentityResolver wechatIdentityResolver,
+    SqliteSaveStore store,
+    AccessTokenService accessTokenService,
+    CancellationToken cancellationToken) =>
+{
+    SignedRequest<WechatLoginRequest> signedRequest = await requestSignatureValidator.ReadAsync<WechatLoginRequest>(httpRequest, cancellationToken);
+    if (!signedRequest.IsValid || signedRequest.Value is null)
+    {
+        return signedRequest.ToResult();
+    }
+
+    WechatLoginRequest request = signedRequest.Value;
+
+    if (!versionPolicy.IsSupported(request.ClientVersion, out string versionError))
+    {
+        return Results.BadRequest(new ErrorResponse("unsupported_client_version", versionError));
+    }
+
+    if (!wechatIdentityResolver.TryResolve(request, out ResolvedExternalIdentity? identity, out ErrorResponse? validationError))
+    {
+        return Results.BadRequest(validationError!);
+    }
+
+    PlayerRecord player = await store.GetOrCreatePlayerAsync(identity!.Provider, identity.ExternalUserId, identity.DisplayName, cancellationToken);
     SaveEnvelope save = await store.GetOrCreateSaveAsync(player.PlayerId, request.ClientVersion, cancellationToken);
     string accessToken = accessTokenService.Create(player.PlayerId);
 

@@ -115,6 +115,77 @@ public sealed class SaveApiTests : IClassFixture<MiniSaveApiFactory>
     }
 
     [Fact]
+    public async Task Wechat_login_creates_default_save_for_new_player()
+    {
+        using HttpClient client = this.factory.CreateClient();
+        WechatLoginRequest request = new("mock-wechat-code-1", "1.0.0", "Wechat Player", "https://avatar.example/1.png");
+
+        using HttpRequestMessage message = SignedJsonRequest(HttpMethod.Post, "/v1/auth/wechat-login", request);
+        using HttpResponseMessage response = await client.SendAsync(message);
+
+        response.EnsureSuccessStatusCode();
+
+        LoginResponse? payload = await response.Content.ReadFromJsonAsync<LoginResponse>();
+
+        Assert.NotNull(payload);
+        Assert.False(string.IsNullOrWhiteSpace(payload.PlayerId));
+        Assert.False(string.IsNullOrWhiteSpace(payload.AccessToken));
+        Assert.Equal(0, payload.Save.Revision);
+        Assert.Equal(1, payload.Save.SaveVersion);
+        Assert.Equal("{}", payload.Save.GameData.GetRawText());
+    }
+
+    [Fact]
+    public async Task Wechat_login_reuses_player_mapping_for_same_code()
+    {
+        using HttpClient client = this.factory.CreateClient();
+
+        LoginResponse firstLogin = await WechatLoginAsync(client, "mock-wechat-code-repeat");
+        LoginResponse secondLogin = await WechatLoginAsync(client, "mock-wechat-code-repeat");
+
+        Assert.Equal(firstLogin.PlayerId, secondLogin.PlayerId);
+    }
+
+    [Fact]
+    public async Task Wechat_login_rejects_empty_code()
+    {
+        using HttpClient client = this.factory.CreateClient();
+        WechatLoginRequest request = new("", "1.0.0", "Wechat Player", null);
+
+        using HttpRequestMessage message = SignedJsonRequest(HttpMethod.Post, "/v1/auth/wechat-login", request);
+        using HttpResponseMessage response = await client.SendAsync(message);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Wechat_login_rejects_unsupported_client_version()
+    {
+        using HttpClient client = this.factory.CreateClient();
+        WechatLoginRequest request = new("mock-wechat-code-version", "0.9.0", "Wechat Player", null);
+
+        using HttpRequestMessage message = SignedJsonRequest(HttpMethod.Post, "/v1/auth/wechat-login", request);
+        using HttpResponseMessage response = await client.SendAsync(message);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Wechat_login_rejects_invalid_signature()
+    {
+        using HttpClient client = this.factory.CreateClient();
+        WechatLoginRequest request = new("mock-wechat-code-invalid-signature", "1.0.0", "Wechat Player", null);
+
+        using HttpRequestMessage message = SignedJsonRequest(HttpMethod.Post, "/v1/auth/wechat-login", request);
+        message.Headers.Remove("X-Request-Signature");
+        message.Headers.Add("X-Request-Signature", "BAD");
+
+        using HttpResponseMessage response = await client.SendAsync(message);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Login_reuses_player_mapping_for_same_external_account()
     {
         using HttpClient client = this.factory.CreateClient();
@@ -213,7 +284,18 @@ public sealed class SaveApiTests : IClassFixture<MiniSaveApiFactory>
         return (await response.Content.ReadFromJsonAsync<LoginResponse>())!;
     }
 
-    private static HttpRequestMessage SignedJsonRequest(HttpMethod method, string uri, LoginRequest request)
+    private static async Task<LoginResponse> WechatLoginAsync(HttpClient client, string code)
+    {
+        WechatLoginRequest request = new(code, "1.0.0", "Wechat Player", null);
+        using HttpRequestMessage message = SignedJsonRequest(HttpMethod.Post, "/v1/auth/wechat-login", request);
+        using HttpResponseMessage response = await client.SendAsync(message);
+
+        response.EnsureSuccessStatusCode();
+
+        return (await response.Content.ReadFromJsonAsync<LoginResponse>())!;
+    }
+
+    private static HttpRequestMessage SignedJsonRequest<TRequest>(HttpMethod method, string uri, TRequest request)
     {
         string body = JsonSerializer.Serialize(request);
         string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
@@ -236,6 +318,8 @@ public sealed class SaveApiTests : IClassFixture<MiniSaveApiFactory>
     }
 
     public sealed record LoginRequest(string Provider, string ExternalUserId, string ClientVersion, string? DisplayName);
+
+    public sealed record WechatLoginRequest(string Code, string ClientVersion, string? DisplayName, string? AvatarUrl);
 
     public sealed record SaveWriteRequest(int ExpectedRevision, int SaveVersion, string ClientVersion, JsonElement GameData);
 
